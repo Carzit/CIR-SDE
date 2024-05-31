@@ -51,7 +51,10 @@ def convert_date_to_float(df:pd.DataFrame, col_name:str):
     df[col_name] = pd.to_datetime(df[col_name])
     min_date = df[col_name].min()
     df[col_name] = (df[col_name] - min_date).dt.days.astype(float)
-    return df
+    return df    
+
+def group_sample(group):
+    return group.sample(n=1)
 
 class TradeData:
 
@@ -101,6 +104,11 @@ class TradeData:
         if vega_strategy == "zero_only":
             # use Zero Rate Shock == 0 only
             self.sub_TPIV = reset_copy(filter_dataframe(df=self.sub_TPIV, pattern=[("Zero Rate Shock", 0)]))
+        elif vega_strategy == "extreme_low":
+            # use Zero Rate Shock == -100 only
+            self.sub_TPIV = reset_copy(filter_dataframe(df=self.sub_TPIV, pattern=[("Zero Rate Shock", -100)]))
+        elif vega_strategy == "random":
+            self.sub_TPIV = reset_copy(self.sub_TPIV.groupby('Value Date')['Vega'].apply(group_sample).reset_index())
         elif vega_strategy == "all":
             # preserve all data
             pass
@@ -144,16 +152,23 @@ class TradeDataset(Dataset):
     def __init__(self, trade_data:TradeData, epsilon_num:int=1, dtype=torch.float, device=torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")) -> None:
         super().__init__()
 
-        self.trade_data_ = trade_data.to_tensor(dtype=dtype, device=device)
-        self.epsilon = torch.randn(len(self), epsilon_num)
+        self.trade_data_ = trade_data
+        self.trade_tensor = self.trade_data_.to_tensor(dtype=dtype, device=device)
+
+        self.epsilon = torch.randn(len(self), epsilon_num).to(dtype=self.trade_tensor.dtype, device=self.trade_tensor.device)
         self.epsilon_num = epsilon_num
-        self.trade_data_ = torch.cat((self.trade_data_, self.epsilon), dim=1)
+        self.trade_tensor = torch.cat((self.trade_tensor, self.epsilon), dim=1)
+
+    def load(self, path, dtype=torch.float, device=torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")):
+        self.trade_data_ = self.trade_data_.load(path)
+        self.trade_tensor = self.trade_data_.to_tensor(dtype=dtype, device=device)
+        self.trade_tensor = torch.cat((self.trade_data_, self.epsilon), dim=1)
     
     def __len__(self):
-        return len(self.trade_data_)
+        return len(self.trade_tensor)
     
     def __getitem__(self, index):
-        date, swap_rate, vols, vega, *epsilon = self.trade_data_[index]
+        date, swap_rate, vols, vega, *epsilon = self.trade_tensor[index]
         if self.epsilon_num == 1:
             return date, swap_rate, vols, vega, epsilon[0]
         return date, swap_rate, vols, vega, epsilon
@@ -161,6 +176,6 @@ class TradeDataset(Dataset):
 
 if __name__ == "__main__":
     trade1 = TradeData('dummyTrade1')
-    trade1.process()
-    print(trade1.to_dataset().trade_data_)
+    trade1.process(vega_strategy="random")
+    print(trade1.to_dataset().trade_tensor)
     #trade1.save()

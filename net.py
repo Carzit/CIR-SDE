@@ -23,4 +23,4 @@ class StepLoss(nn.Module):
         super().__init__()
     
     def forward(self, r_predict, r_true, constraint):
-        return (r_predict - r_true) ** 2 #nn.ReLU()(-constraint)
+        return (r_predict - r_true) ** 2 + nn.ReLU()(-constraint)

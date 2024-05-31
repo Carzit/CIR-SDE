@@ -6,7 +6,7 @@ from torch.utils.data import Dataset, DataLoader
 from torch.utils.tensorboard.writer import SummaryWriter
 
 from tqdm import tqdm
-from utils.save_and_load import save
+from utils.save_and_load import save, load
 from dataset import TradeData, TradeDataset
 from net import *
 
@@ -63,7 +63,7 @@ def train(
                 loss_steps.append(loss_step)
                 
                 # Record Trace Loss Scalar
-                writer.add_scalar(f"Trace Loss {trace}", loss_step.item(), step_)
+                writer.add_scalar(f"Epoch{epoch}_Trace{trace}", loss_step.item(), step_)
 
                 date_ = date
                 swap_rate_ = swap_rate
@@ -78,7 +78,7 @@ def train(
             optimizer.step()
          
             # Record Trace Loss Scalar
-            writer.add_scalar(f"Trace Loss", loss_trace.item(), epoch)
+            writer.add_scalar(f"Train Loss", loss_trace.item(), epoch)
         
         # If learning rate scheduler exisit, update learning rate per epoch.
         writer.add_scalar("Learning Rate", optimizer.param_groups[0]["lr"], epoch)
@@ -101,13 +101,76 @@ def train(
                 print(model_path)
                 save(model, model_path, save_format)
         
-        
     writer.close()
     model_name = f"{save_name}_final"
     model_path = os.path.join(save_dir, model_name)
     save(model, model_path, save_format)
     
     return model
+
+@torch.no_grad()
+def infer(model:torch.nn.Module, 
+          model_path:str,
+          train_generator:DataLoader, *, 
+          log_dir:str = r"log", 
+          save_dir:str=os.curdir,
+          save_name:str="result",
+          device:torch.device=torch.device('cpu'))->torch.nn.Module:
+
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+
+    writer = SummaryWriter(os.path.join(log_dir, "TEST"+datetime.datetime.now().strftime("%Y%m%d-%H%M%S")))
+    model = model.to(device=device)
+    load(model=model, path=model_path)
+
+    model.eval()
+    traces = []
+    traces_tensor = []
+    for trace in tqdm(range(len(train_generator)-2)):
+        # Train one Trace
+        steps = []
+        steps_tensor = []
+            
+        for step_, (date, swap_rate, vols, vega, epsilon) in enumerate(train_generator):
+            if step_ in range(trace+1): continue
+            elif step_ == trace+1:
+                date_ = date
+                swap_rate_ = swap_rate
+                vols_ = vols
+                vega_ = vega
+                epsilon_ = epsilon
+                continue
+
+            r = swap_rate_
+            dt = date - date_
+            sigma = vols_
+            e = epsilon_
+
+            r_predict, c = model(r, dt, sigma, sample=True)
+            steps_tensor.append(r_predict)
+            steps.append(r_predict.item())
+                
+            # Record Trace Loss Scalar
+            writer.add_scalar(f"Trace{trace}", r_predict.item(), step_)
+            writer.flush()
+
+            date_ = date
+            swap_rate_ = swap_rate
+            vols_ = vols
+            vega_ = vega
+            epsilon_ = epsilon
+
+        traces_tensor.append(steps_tensor)
+        traces.append(steps)
+
+    print(traces)
+
+    writer.close()
+    torch.save({"traces_tensor": traces_tensor, "traces": traces}, os.path.join(save_dir, save_name))
+
 
 if __name__ == "__main__":
     trade1 = TradeData('dummyTrade1')
@@ -118,13 +181,15 @@ if __name__ == "__main__":
     model = CIR()
     loss_fn = StepLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-
+    '''
     train(epoches=20,
           optimizer=optimizer,
           model=model,
           loss_fn=loss_fn,
           train_generator=train_generator,
           device=torch.device("cpu"))
+    '''
+    infer(model, "model_epoch10.pt", train_generator)
 
     
 
