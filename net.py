@@ -15,7 +15,7 @@ class CIR(nn.Module):
         ode_part = self.k * (self.theta - r) * dt
         sde_part = sigma * torch.sqrt(r * dt) * epsilon
         if sample:
-            sde_part = sde_part * torch.randn(1)
+            sde_part = sde_part * torch.randn(1).to(sde_part.device)
         return ode_part + sde_part, 2 * self.k * self.theta - sigma ** 2
     
 class StepLoss(nn.Module):

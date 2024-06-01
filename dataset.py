@@ -1,12 +1,15 @@
 import os
+import argparse
 from typing import List, Tuple, Callable, Union
 
 import pandas as pd
 import torch
 from torch.utils.data import Dataset
 
-from Info import *
+from utils.Info import *
+from utils.pd_ops import *
 
+# Put raw csv file at the same path
 raw_csv_infolist = InfoList([
     Info("market-data-swap-rates", {"MDSR", "Market-Data-Swap-Rates", "market_data_swap_rates"}, df=pd.read_csv("market-data-swap-rates.csv")),
     Info("market-data-swaption-vols", {"MDSV", "Market-Data-Swaption-Vols", "market_data_swaption_vols"}, df=pd.read_csv("market-data-swaption-vols.csv")),
@@ -14,47 +17,6 @@ raw_csv_infolist = InfoList([
     Info("trade-price-ir-vegas", {"TPIV", "Trade=Price-Ir-Vegas", "trade_price_ir_vegas"}, df=pd.read_csv("trade-price-ir-vegas.csv"))
 ])
 
-def reset_copy(df:pd.DataFrame):
-    result = df.copy()
-    result.reset_index(drop=True, inplace=True)
-    return result
-
-def filter_dataframe(df:pd.DataFrame, pattern:List[Tuple]):
-    filtered_df = df
-    for col, val in pattern:
-        filtered_df = filtered_df[filtered_df[col] == val]
-    return filtered_df
-
-def filter_common(patterns:List[Tuple]):
-    common_values = set(patterns[0][0][patterns[0][1]])
-    for df, col in patterns[1:]:
-        common_values = common_values.intersection(df[col])
-    filtered_dfs = [reset_copy(df[df[col].isin(common_values)]) for df, col in patterns]
-    return filtered_dfs
-
-def join_common(patterns:List[Tuple]):
-    merged_df = patterns[0][0]
-    for df, col in patterns[1:]:
-        merged_df = merged_df.merge(df, on=col)
-    return merged_df
-
-def map_dict(df:pd, key:str, value:str, value_func:Callable=lambda v: v):
-    keys = df[key]
-    values = df[value]
-    result_dict = dict(zip(keys, values))
-    for k, v in result_dict.items():
-        result_dict[k] = value_func(v)
-    return result_dict
-
-def convert_date_to_float(df:pd.DataFrame, col_name:str):
-    df = df.copy()
-    df[col_name] = pd.to_datetime(df[col_name])
-    min_date = df[col_name].min()
-    df[col_name] = (df[col_name] - min_date).dt.days.astype(float)
-    return df    
-
-def group_sample(group):
-    return group.sample(n=1)
 
 class TradeData:
 
@@ -158,11 +120,6 @@ class TradeDataset(Dataset):
         self.epsilon = torch.randn(len(self), epsilon_num).to(dtype=self.trade_tensor.dtype, device=self.trade_tensor.device)
         self.epsilon_num = epsilon_num
         self.trade_tensor = torch.cat((self.trade_tensor, self.epsilon), dim=1)
-
-    def load(self, path, dtype=torch.float, device=torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")):
-        self.trade_data_ = self.trade_data_.load(path)
-        self.trade_tensor = self.trade_data_.to_tensor(dtype=dtype, device=device)
-        self.trade_tensor = torch.cat((self.trade_data_, self.epsilon), dim=1)
     
     def __len__(self):
         return len(self.trade_tensor)
@@ -172,10 +129,42 @@ class TradeDataset(Dataset):
         if self.epsilon_num == 1:
             return date, swap_rate, vols, vega, epsilon[0]
         return date, swap_rate, vols, vega, epsilon
+    
+    def load(self, path:str, dtype=torch.float, device=torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")):
+        if path.endswith(".csv"):
+            df = pd.read_csv(path)
+            self.trade_tensor = torch.tensor(convert_date_to_float(df, col_name="Date").to_numpy(), dtype=dtype, device=device)
+            self.trade_tensor = torch.cat((self.trade_data_, self.epsilon), dim=1)
+        elif path.endswith(".pt"):
+            self = torch.load(path, map_location=device)
+        else:
+            self.trade_data_ = self.trade_data_.load(path)
+            self.trade_tensor = self.trade_data_.to_tensor(dtype=dtype, device=device)
+            self.trade_tensor = torch.cat((self.trade_data_, self.epsilon), dim=1)
 
+    def save(self, path):
+        torch.save(self, path)
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Data Preprocess.")
+    parser.add_argument("--trade", type=str, required=True, help="Trade info name. e.g. dummyTrade1")
+    parser.add_argument("--load", type=str, default=None, help="(Optional) Load preprocessed trade data path.")
+    parser.add_argument("--save", type=str, required=True, help="Dataset `.pt` File path")
+    parser.add_argument("--device", type=str, default="cpu", help="Device `cpu` or `cuda`")
+    
+    return parser.parse_args()
 
 if __name__ == "__main__":
-    trade1 = TradeData('dummyTrade1')
-    trade1.process(vega_strategy="random")
-    print(trade1.to_dataset().trade_tensor)
-    #trade1.save()
+    args = parse_args()
+
+    trade_data = TradeData(args.trade)
+
+    if args.load:
+        trade_data.load(args.load)
+    else:
+        trade_data.process()
+
+    train_set = trade_data.to_dataset(device=torch.device(args.device))
+    train_set.save(args.save)
+
+    #Example: python dataset.py --trade dummyTrade1 --save data\dataset.pt --device cpu 

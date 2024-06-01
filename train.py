@@ -1,5 +1,6 @@
 import os
 import datetime
+import argparse
 
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -78,7 +79,9 @@ def train(
             optimizer.step()
          
             # Record Trace Loss Scalar
-            writer.add_scalar(f"Train Loss", loss_trace.item(), epoch)
+            writer.add_scalar("Train Loss", loss_trace.item(), epoch)
+            writer.add_scalar("k", model.k.item(), epoch)
+            writer.add_scalar("theta", model.theta.item(), epoch)
         
         # If learning rate scheduler exisit, update learning rate per epoch.
         writer.add_scalar("Learning Rate", optimizer.param_groups[0]["lr"], epoch)
@@ -108,88 +111,44 @@ def train(
     
     return model
 
-@torch.no_grad()
-def infer(model:torch.nn.Module, 
-          model_path:str,
-          train_generator:DataLoader, *, 
-          log_dir:str = r"log", 
-          save_dir:str=os.curdir,
-          save_name:str="result",
-          device:torch.device=torch.device('cpu'))->torch.nn.Module:
-
-    if not os.path.exists(log_dir):
-        os.makedirs(log_dir)
-    if not os.path.exists(save_dir):
-        os.makedirs(save_dir)
-
-    writer = SummaryWriter(os.path.join(log_dir, "TEST"+datetime.datetime.now().strftime("%Y%m%d-%H%M%S")))
-    model = model.to(device=device)
-    load(model=model, path=model_path)
-
-    model.eval()
-    traces = []
-    traces_tensor = []
-    for trace in tqdm(range(len(train_generator)-2)):
-        # Train one Trace
-        steps = []
-        steps_tensor = []
-            
-        for step_, (date, swap_rate, vols, vega, epsilon) in enumerate(train_generator):
-            if step_ in range(trace+1): continue
-            elif step_ == trace+1:
-                date_ = date
-                swap_rate_ = swap_rate
-                vols_ = vols
-                vega_ = vega
-                epsilon_ = epsilon
-                continue
-
-            r = swap_rate_
-            dt = date - date_
-            sigma = vols_
-            e = epsilon_
-
-            r_predict, c = model(r, dt, sigma, sample=True)
-            steps_tensor.append(r_predict)
-            steps.append(r_predict.item())
-                
-            # Record Trace Loss Scalar
-            writer.add_scalar(f"Trace{trace}", r_predict.item(), step_)
-            writer.flush()
-
-            date_ = date
-            swap_rate_ = swap_rate
-            vols_ = vols
-            vega_ = vega
-            epsilon_ = epsilon
-
-        traces_tensor.append(steps_tensor)
-        traces.append(steps)
-
-    print(traces)
-
-    writer.close()
-    torch.save({"traces_tensor": traces_tensor, "traces": traces}, os.path.join(save_dir, save_name))
+def parse_args():
+    parser = argparse.ArgumentParser(description="Train. Use gradient descent to fit k and theta parameters.")
+    parser.add_argument("--trade", type=str, required=True, help="Trade info name. e.g. dummyTrade1")
+    parser.add_argument("--load", type=str, default=None, help="(Optional) Load `.pt` TradeDataset path.")
+    parser.add_argument("--save", type=str, required=True, help="Model Weights `.pt` File name")
+    parser.add_argument("--epoch", type=int, default=20, help="Max training epoch")
+    parser.add_argument("--lr", type=float, default=0.001, help="Learning rate")
+    parser.add_argument("--device", type=str, default="cpu", help="Device `cpu` or `cuda`")
+    
+    return parser.parse_args()
 
 
 if __name__ == "__main__":
-    trade1 = TradeData('dummyTrade1')
-    trade1.process()
-    train_set = trade1.to_dataset()
-    train_generator = DataLoader(train_set, batch_size=None, shuffle=False, batch_sampler=None)
+    args = parse_args()
 
+    print(f"loading {args.trade} data from {args.load}...")
+    trade_data = TradeData(args.trade)
+    trade_data.process()
+
+    train_set = trade_data.to_dataset(device=torch.device(args.device))
+    if args.load:
+        train_set.load(args.load, device=torch.device(args.device))
+    train_generator = DataLoader(train_set, batch_size=None, shuffle=False, batch_sampler=None)
+    
     model = CIR()
     loss_fn = StepLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-    '''
-    train(epoches=20,
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+
+    train(epoches=args.epoch,
           optimizer=optimizer,
           model=model,
           loss_fn=loss_fn,
           train_generator=train_generator,
-          device=torch.device("cpu"))
-    '''
-    infer(model, "model_epoch10.pt", train_generator)
+          save_dir="weights",
+          save_name=args.save,
+          device=torch.device(args.device))
+    
+    #Example: python train.py --trade dummyTrade1 --load data\dataset.pt --save trade1.pt --epoch 20 --lr 0.001 --device cpu
 
     
 
