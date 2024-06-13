@@ -43,3 +43,28 @@ def convert_date_to_float(df:pd.DataFrame, col_name:str):
 
 def group_sample(group):
     return group.sample(n=1)
+
+def pivot_labels_to_columns(df, date_col='Date', label_col='label', value_col='value', aggfunc='mean'):
+    """
+    将 DataFrame 中的标签列和值列转换为以日期为行的透视表，列名格式为 "label-value"。
+
+    参数:
+    df (pd.DataFrame): 输入的 DataFrame，其中包含日期列、标签列和值列。
+    date_col (str): 表示日期的列名，默认为 'Date'。
+    label_col (str): 表示标签的列名，默认为 'label'。
+    value_col (str): 表示值的列名，默认为 'value'。
+    aggfunc (str or function): 用于聚合重复项的函数，默认为 'mean'。
+
+    返回:
+    pd.DataFrame: 转换后的 DataFrame，列名格式为 "label-value"。
+    """
+    # 处理重复项，进行聚合
+    df_agg = df.groupby([date_col, label_col], as_index=False).agg({value_col: aggfunc})
+    
+    # 通过 groupby 和 unstack 进行透视
+    grouped_df = df_agg.set_index([date_col, label_col])[value_col].unstack().reset_index()
+    
+    # 修改列名，生成所需的格式
+    grouped_df.columns = [f"{col}-{value_col}" if col != date_col else col for col in grouped_df.columns]
+    
+    return grouped_df
