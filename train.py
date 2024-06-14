@@ -57,8 +57,8 @@ def train(
             optimizer.step()
 
             with torch.no_grad():
-                weight_sum = model.cir_cell.weight.data.sum()
-                model.cir_cell.weight.data /= weight_sum
+                weight_sum = model.cir_cell.epsilon_linear_layer.weight.data.sum()
+                model.cir_cell.epsilon_linear_layer.weight.data /= weight_sum
 
             train_loss_epoch += train_loss.item()
 
@@ -169,7 +169,7 @@ if __name__ == "__main__":
           save_name=args.save_name,
           device=torch.device(args.device))
     
-    # Example: python train.py --load_folder "data\dummyTrade1" --epsilon_num 1  --save_folder "save" --save_name "M1" --epoch 20 --lr 0.001 --device cpu
+    # Example: python train.py --load_folder "data\dummyTrade1" --epsilon_num 5  --save_folder "save" --save_name "M1" --epoch 20 --lr 0.001 --device cpu
 
     
 

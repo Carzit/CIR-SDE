@@ -12,7 +12,6 @@ from utils import save_and_load, training_board, parser_utils
 from dataset import TradeData, TradeDataset
 from net import *
 
-
 @torch.no_grad()
 def test(
         model:CIRNet, 
